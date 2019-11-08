@@ -46,7 +46,7 @@ namespace AST {
 // instantiate global variables (private API)
 namespace AST_INTERNAL {
 	bool flag_dump_ast1, flag_dump_ast2, flag_no_dump_ptr, flag_dump_vlog1, flag_dump_vlog2, flag_dump_rtlil, flag_nolatches, flag_nomeminit;
-	bool flag_nomem2reg, flag_mem2reg, flag_noblackbox, flag_lib, flag_nowb, flag_noopt, flag_icells, flag_autowire;
+	bool flag_nomem2reg, flag_mem2reg, flag_noblackbox, flag_lib, flag_nowb, flag_noopt, flag_icells, flag_pwires, flag_autowire;
 	AstNode *current_ast, *current_ast_mod;
 	std::map<std::string, AstNode*> current_scope;
 	const dict<RTLIL::SigBit, RTLIL::SigBit> *genRTLIL_subst_ptr = NULL;
@@ -158,7 +158,14 @@ std::string AST::type2str(AstNodeType type)
 	X(AST_POSEDGE)
 	X(AST_NEGEDGE)
 	X(AST_EDGE)
+	X(AST_INTERFACE)
+	X(AST_INTERFACEPORT)
+	X(AST_INTERFACEPORTTYPE)
+	X(AST_MODPORT)
+	X(AST_MODPORTMEMBER)
 	X(AST_PACKAGE)
+	X(AST_WIRETYPE)
+	X(AST_TYPEDEF)
 #undef X
 	default:
 		log_abort();
@@ -201,6 +208,7 @@ AstNode::AstNode(AstNodeType type, AstNode *child1, AstNode *child2, AstNode *ch
 	was_checked = false;
 	range_valid = false;
 	range_swapped = false;
+	is_custom_type = false;
 	port_id = 0;
 	range_left = -1;
 	range_right = 0;
@@ -283,8 +291,8 @@ void AstNode::dumpAst(FILE *f, std::string indent) const
 	if (!bits.empty()) {
 		fprintf(f, " bits='");
 		for (size_t i = bits.size(); i > 0; i--)
-			fprintf(f, "%c", bits[i-1] == RTLIL::S0 ? '0' :
-					bits[i-1] == RTLIL::S1 ? '1' :
+			fprintf(f, "%c", bits[i-1] == State::S0 ? '0' :
+					bits[i-1] == State::S1 ? '1' :
 					bits[i-1] == RTLIL::Sx ? 'x' :
 					bits[i-1] == RTLIL::Sz ? 'z' : '?');
 		fprintf(f, "'(%d)", GetSize(bits));
@@ -716,7 +724,7 @@ AstNode *AstNode::mkconst_int(uint32_t v, bool is_signed, int width)
 	node->integer = v;
 	node->is_signed = is_signed;
 	for (int i = 0; i < width; i++) {
-		node->bits.push_back((v & 1) ? RTLIL::S1 : RTLIL::S0);
+		node->bits.push_back((v & 1) ? State::S1 : State::S0);
 		v = v >> 1;
 	}
 	node->range_valid = true;
@@ -733,9 +741,9 @@ AstNode *AstNode::mkconst_bits(const std::vector<RTLIL::State> &v, bool is_signe
 	node->bits = v;
 	for (size_t i = 0; i < 32; i++) {
 		if (i < node->bits.size())
-			node->integer |= (node->bits[i] == RTLIL::S1) << i;
+			node->integer |= (node->bits[i] == State::S1) << i;
 		else if (is_signed && !node->bits.empty())
-			node->integer |= (node->bits.back() == RTLIL::S1) << i;
+			node->integer |= (node->bits.back() == State::S1) << i;
 	}
 	node->range_valid = true;
 	node->range_left = node->bits.size()-1;
@@ -767,7 +775,7 @@ AstNode *AstNode::mkconst_str(const std::string &str)
 	for (size_t i = 0; i < str.size(); i++) {
 		unsigned char ch = str[str.size() - i - 1];
 		for (int j = 0; j < 8; j++) {
-			data.push_back((ch & 1) ? RTLIL::S1 : RTLIL::S0);
+			data.push_back((ch & 1) ? State::S1 : State::S0);
 			ch = ch >> 1;
 		}
 	}
@@ -780,7 +788,7 @@ AstNode *AstNode::mkconst_str(const std::string &str)
 bool AstNode::bits_only_01() const
 {
 	for (auto bit : bits)
-		if (bit != RTLIL::S0 && bit != RTLIL::S1)
+		if (bit != State::S0 && bit != State::S1)
 			return false;
 	return true;
 }
@@ -1099,6 +1107,13 @@ static AstModule* process_module(AstNode *ast, bool defer, AstNode *original_ast
 
 		ignoreThisSignalsInInitial = RTLIL::SigSpec();
 	}
+	else {
+		for (auto &attr : ast->attributes) {
+			if (attr.second->type != AST_CONSTANT)
+				continue;
+			current_module->attributes[attr.first] = attr.second->asAttrConst();
+		}
+	}
 
 	if (ast->type == AST_INTERFACE)
 		current_module->set_bool_attribute("\\is_interface");
@@ -1112,6 +1127,7 @@ static AstModule* process_module(AstNode *ast, bool defer, AstNode *original_ast
 	current_module->nowb = flag_nowb;
 	current_module->noopt = flag_noopt;
 	current_module->icells = flag_icells;
+	current_module->pwires = flag_pwires;
 	current_module->autowire = flag_autowire;
 	current_module->fixup_ports();
 
@@ -1126,7 +1142,7 @@ static AstModule* process_module(AstNode *ast, bool defer, AstNode *original_ast
 
 // create AstModule instances for all modules in the AST tree and add them to 'design'
 void AST::process(RTLIL::Design *design, AstNode *ast, bool dump_ast1, bool dump_ast2, bool no_dump_ptr, bool dump_vlog1, bool dump_vlog2, bool dump_rtlil,
-		bool nolatches, bool nomeminit, bool nomem2reg, bool mem2reg, bool noblackbox, bool lib, bool nowb, bool noopt, bool icells, bool nooverwrite, bool overwrite, bool defer, bool autowire)
+		bool nolatches, bool nomeminit, bool nomem2reg, bool mem2reg, bool noblackbox, bool lib, bool nowb, bool noopt, bool icells, bool pwires, bool nooverwrite, bool overwrite, bool defer, bool autowire)
 {
 	current_ast = ast;
 	flag_dump_ast1 = dump_ast1;
@@ -1144,6 +1160,7 @@ void AST::process(RTLIL::Design *design, AstNode *ast, bool dump_ast1, bool dump
 	flag_nowb = nowb;
 	flag_noopt = noopt;
 	flag_icells = icells;
+	flag_pwires = pwires;
 	flag_autowire = autowire;
 
 	log_assert(current_ast->type == AST_DESIGN);
@@ -1162,7 +1179,7 @@ void AST::process(RTLIL::Design *design, AstNode *ast, bool dump_ast1, bool dump
 				}
 			}
 
-			if (flag_icells && (*it)->str.substr(0, 2) == "\\$")
+			if (flag_icells && (*it)->str.compare(0, 2, "\\$") == 0)
 				(*it)->str = (*it)->str.substr(1);
 
 			if (defer)
@@ -1170,7 +1187,7 @@ void AST::process(RTLIL::Design *design, AstNode *ast, bool dump_ast1, bool dump
 
 			if (design->has((*it)->str)) {
 				RTLIL::Module *existing_mod = design->module((*it)->str);
-				if (!nooverwrite && !overwrite && !existing_mod->get_bool_attribute("\\blackbox")) {
+				if (!nooverwrite && !overwrite && !existing_mod->get_blackbox_attribute()) {
 					log_file_error((*it)->filename, (*it)->linenum, "Re-definition of module `%s'!\n", (*it)->str.c_str());
 				} else if (nooverwrite) {
 					log("Ignoring re-definition of module `%s' at %s:%d.\n",
@@ -1282,6 +1299,8 @@ void AST::explode_interface_port(AstNode *module_ast, RTLIL::Module * intfmodule
 // from AST. The interface members are copied into the AST module with the prefix of the interface.
 void AstModule::reprocess_module(RTLIL::Design *design, dict<RTLIL::IdString, RTLIL::Module*> local_interfaces)
 {
+	loadconfig();
+
 	bool is_top = false;
 	AstNode *new_ast = ast->clone();
 	for (auto &intf : local_interfaces) {
@@ -1366,10 +1385,10 @@ void AstModule::reprocess_module(RTLIL::Design *design, dict<RTLIL::IdString, RT
 
 // create a new parametric module (when needed) and return the name of the generated module - WITH support for interfaces
 // This method is used to explode the interface when the interface is a port of the module (not instantiated inside)
-RTLIL::IdString AstModule::derive(RTLIL::Design *design, dict<RTLIL::IdString, RTLIL::Const> parameters, dict<RTLIL::IdString, RTLIL::Module*> interfaces, dict<RTLIL::IdString, RTLIL::IdString> modports, bool mayfail)
+RTLIL::IdString AstModule::derive(RTLIL::Design *design, dict<RTLIL::IdString, RTLIL::Const> parameters, dict<RTLIL::IdString, RTLIL::Module*> interfaces, dict<RTLIL::IdString, RTLIL::IdString> modports, bool /*mayfail*/)
 {
 	AstNode *new_ast = NULL;
-	std::string modname = derive_common(design, parameters, &new_ast, mayfail);
+	std::string modname = derive_common(design, parameters, &new_ast);
 
 	// Since interfaces themselves may be instantiated with different parameters,
 	// "modname" must also take those into account, so that unique modules
@@ -1382,11 +1401,17 @@ RTLIL::IdString AstModule::derive(RTLIL::Design *design, dict<RTLIL::IdString, R
 		has_interfaces = true;
 	}
 
+	std::string new_modname = modname;
 	if (has_interfaces)
-		modname += "$interfaces$" + interf_info;
+		new_modname += "$interfaces$" + interf_info;
 
 
-	if (!design->has(modname)) {
+	if (!design->has(new_modname)) {
+		if (!new_ast) {
+			auto mod = dynamic_cast<AstModule*>(design->module(modname));
+			new_ast = mod->ast->clone();
+		}
+		modname = new_modname;
 		new_ast->str = modname;
 
 		// Iterate over all interfaces which are ports in this module:
@@ -1439,10 +1464,10 @@ RTLIL::IdString AstModule::derive(RTLIL::Design *design, dict<RTLIL::IdString, R
 }
 
 // create a new parametric module (when needed) and return the name of the generated module - without support for interfaces
-RTLIL::IdString AstModule::derive(RTLIL::Design *design, dict<RTLIL::IdString, RTLIL::Const> parameters, bool mayfail)
+RTLIL::IdString AstModule::derive(RTLIL::Design *design, dict<RTLIL::IdString, RTLIL::Const> parameters, bool /*mayfail*/)
 {
 	AstNode *new_ast = NULL;
-	std::string modname = derive_common(design, parameters, &new_ast, mayfail);
+	std::string modname = derive_common(design, parameters, &new_ast);
 
 	if (!design->has(modname)) {
 		new_ast->str = modname;
@@ -1457,60 +1482,75 @@ RTLIL::IdString AstModule::derive(RTLIL::Design *design, dict<RTLIL::IdString, R
 }
 
 // create a new parametric module (when needed) and return the name of the generated module
-std::string AstModule::derive_common(RTLIL::Design *design, dict<RTLIL::IdString, RTLIL::Const> parameters, AstNode **new_ast_out, bool)
+std::string AstModule::derive_common(RTLIL::Design *design, dict<RTLIL::IdString, RTLIL::Const> parameters, AstNode **new_ast_out)
 {
 	std::string stripped_name = name.str();
 
-	if (stripped_name.substr(0, 9) == "$abstract")
+	if (stripped_name.compare(0, 9, "$abstract") == 0)
 		stripped_name = stripped_name.substr(9);
 
-	log_header(design, "Executing AST frontend in derive mode using pre-parsed AST for module `%s'.\n", stripped_name.c_str());
-
-	current_ast = NULL;
-	flag_dump_ast1 = false;
-	flag_dump_ast2 = false;
-	flag_dump_vlog1 = false;
-	flag_dump_vlog2 = false;
-	flag_nolatches = nolatches;
-	flag_nomeminit = nomeminit;
-	flag_nomem2reg = nomem2reg;
-	flag_mem2reg = mem2reg;
-	flag_noblackbox = noblackbox;
-	flag_lib = lib;
-	flag_nowb = nowb;
-	flag_noopt = noopt;
-	flag_icells = icells;
-	flag_autowire = autowire;
-	use_internal_line_num();
-
 	std::string para_info;
-	AstNode *new_ast = ast->clone();
 
 	int para_counter = 0;
-	int orig_parameters_n = parameters.size();
-	for (auto it = new_ast->children.begin(); it != new_ast->children.end(); it++) {
-		AstNode *child = *it;
+	for (const auto child : ast->children) {
 		if (child->type != AST_PARAMETER)
 			continue;
 		para_counter++;
 		std::string para_id = child->str;
 		if (parameters.count(para_id) > 0) {
 			log("Parameter %s = %s\n", child->str.c_str(), log_signal(RTLIL::SigSpec(parameters[child->str])));
-	rewrite_parameter:
 			para_info += stringf("%s=%s", child->str.c_str(), log_signal(RTLIL::SigSpec(parameters[para_id])));
-			delete child->children.at(0);
-			if ((parameters[para_id].flags & RTLIL::CONST_FLAG_STRING) != 0)
-				child->children[0] = AstNode::mkconst_str(parameters[para_id].decode_string());
-			else
-				child->children[0] = AstNode::mkconst_bits(parameters[para_id].bits, (parameters[para_id].flags & RTLIL::CONST_FLAG_SIGNED) != 0);
-			parameters.erase(para_id);
 			continue;
+		}
+		para_id = stringf("$%d", para_counter);
+		if (parameters.count(para_id) > 0) {
+			log("Parameter %d (%s) = %s\n", para_counter, child->str.c_str(), log_signal(RTLIL::SigSpec(parameters[para_id])));
+			para_info += stringf("%s=%s", child->str.c_str(), log_signal(RTLIL::SigSpec(parameters[para_id])));
+			continue;
+		}
+	}
+
+	std::string modname;
+	if (parameters.size() == 0)
+		modname = stripped_name;
+	else if (para_info.size() > 60)
+		modname = "$paramod$" + sha1(para_info) + stripped_name;
+	else
+		modname = "$paramod" + stripped_name + para_info;
+
+	if (design->has(modname))
+		return modname;
+
+	log_header(design, "Executing AST frontend in derive mode using pre-parsed AST for module `%s'.\n", stripped_name.c_str());
+	loadconfig();
+
+	AstNode *new_ast = ast->clone();
+	para_counter = 0;
+	for (auto child : new_ast->children) {
+		if (child->type != AST_PARAMETER)
+			continue;
+		para_counter++;
+		std::string para_id = child->str;
+		if (parameters.count(para_id) > 0) {
+			log("Parameter %s = %s\n", child->str.c_str(), log_signal(RTLIL::SigSpec(parameters[child->str])));
+			goto rewrite_parameter;
 		}
 		para_id = stringf("$%d", para_counter);
 		if (parameters.count(para_id) > 0) {
 			log("Parameter %d (%s) = %s\n", para_counter, child->str.c_str(), log_signal(RTLIL::SigSpec(parameters[para_id])));
 			goto rewrite_parameter;
 		}
+		continue;
+	rewrite_parameter:
+		delete child->children.at(0);
+		if ((parameters[para_id].flags & RTLIL::CONST_FLAG_REAL) != 0) {
+			child->children[0] = new AstNode(AST_REALVALUE);
+			child->children[0]->realvalue = std::stod(parameters[para_id].decode_string());
+		} else if ((parameters[para_id].flags & RTLIL::CONST_FLAG_STRING) != 0)
+			child->children[0] = AstNode::mkconst_str(parameters[para_id].decode_string());
+		else
+			child->children[0] = AstNode::mkconst_bits(parameters[para_id].bits, (parameters[para_id].flags & RTLIL::CONST_FLAG_SIGNED) != 0);
+		parameters.erase(para_id);
 	}
 
 	for (auto param : parameters) {
@@ -1522,16 +1562,6 @@ std::string AstModule::derive_common(RTLIL::Design *design, dict<RTLIL::IdString
 			defparam->children.push_back(AstNode::mkconst_bits(param.second.bits, (param.second.flags & RTLIL::CONST_FLAG_SIGNED) != 0));
 		new_ast->children.push_back(defparam);
 	}
-
-	std::string modname;
-
-	if (orig_parameters_n == 0)
-		modname = stripped_name;
-	else if (para_info.size() > 60)
-		modname = "$paramod$" + sha1(para_info) + stripped_name;
-	else
-		modname = "$paramod" + stripped_name + para_info;
-
 
 	(*new_ast_out) = new_ast;
 	return modname;
@@ -1548,12 +1578,36 @@ RTLIL::Module *AstModule::clone() const
 	new_mod->nomeminit = nomeminit;
 	new_mod->nomem2reg = nomem2reg;
 	new_mod->mem2reg = mem2reg;
+	new_mod->noblackbox = noblackbox;
 	new_mod->lib = lib;
+	new_mod->nowb = nowb;
 	new_mod->noopt = noopt;
 	new_mod->icells = icells;
+	new_mod->pwires = pwires;
 	new_mod->autowire = autowire;
 
 	return new_mod;
+}
+
+void AstModule::loadconfig() const
+{
+	current_ast = NULL;
+	flag_dump_ast1 = false;
+	flag_dump_ast2 = false;
+	flag_dump_vlog1 = false;
+	flag_dump_vlog2 = false;
+	flag_nolatches = nolatches;
+	flag_nomeminit = nomeminit;
+	flag_nomem2reg = nomem2reg;
+	flag_mem2reg = mem2reg;
+	flag_noblackbox = noblackbox;
+	flag_lib = lib;
+	flag_nowb = nowb;
+	flag_noopt = noopt;
+	flag_icells = icells;
+	flag_pwires = pwires;
+	flag_autowire = autowire;
+	use_internal_line_num();
 }
 
 // internal dummy line number callbacks

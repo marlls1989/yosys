@@ -504,6 +504,7 @@ struct AST_INTERNAL::ProcessGenerator
 
 					RTLIL::CaseRule *backup_case = current_case;
 					current_case = new RTLIL::CaseRule;
+					current_case->attributes["\\src"] = stringf("%s:%d", child->filename.c_str(), child->linenum);
 					last_generated_case = current_case;
 					addChunkActions(current_case->actions, this_case_eq_ltemp, this_case_eq_rvalue);
 					for (auto node : child->children) {
@@ -853,7 +854,6 @@ RTLIL::SigSpec AstNode::genRTLIL(int width_hint, bool sign_hint)
 	case AST_FUNCTION:
 	case AST_DPI_FUNCTION:
 	case AST_AUTOWIRE:
-	case AST_LOCALPARAM:
 	case AST_DEFPARAM:
 	case AST_GENVAR:
 	case AST_GENFOR:
@@ -863,6 +863,7 @@ RTLIL::SigSpec AstNode::genRTLIL(int width_hint, bool sign_hint)
 	case AST_PACKAGE:
 	case AST_MODPORT:
 	case AST_MODPORTMEMBER:
+	case AST_TYPEDEF:
 		break;
 	case AST_INTERFACEPORT: {
 		// If a port in a module with unknown type is found, mark it with the attribute 'is_interface'
@@ -895,6 +896,26 @@ RTLIL::SigSpec AstNode::genRTLIL(int width_hint, bool sign_hint)
 	// remember the parameter, needed for example in techmap
 	case AST_PARAMETER:
 		current_module->avail_parameters.insert(str);
+		/* fall through */
+	case AST_LOCALPARAM:
+		if (flag_pwires)
+		{
+			if (GetSize(children) < 1 || children[0]->type != AST_CONSTANT)
+				log_file_error(filename, linenum, "Parameter `%s' with non-constant value!\n", str.c_str());
+
+			RTLIL::Const val = children[0]->bitsAsConst();
+			RTLIL::Wire *wire = current_module->addWire(str, GetSize(val));
+			current_module->connect(wire, val);
+
+			wire->attributes["\\src"] = stringf("%s:%d", filename.c_str(), linenum);
+			wire->attributes[type == AST_PARAMETER ? "\\parameter" : "\\localparam"] = 1;
+
+			for (auto &attr : attributes) {
+				if (attr.second->type != AST_CONSTANT)
+					log_file_error(filename, linenum, "Attribute `%s' with non-constant value!\n", attr.first.c_str());
+				wire->attributes[attr.first] = attr.second->asAttrConst();
+			}
+		}
 		break;
 
 	// create an RTLIL::Wire for an AST_WIRE node
@@ -1496,7 +1517,7 @@ RTLIL::SigSpec AstNode::genRTLIL(int width_hint, bool sign_hint)
 				AstNode *child = *it;
 				if (child->type == AST_CELLTYPE) {
 					cell->type = child->str;
-					if (flag_icells && cell->type.substr(0, 2) == "\\$")
+					if (flag_icells && cell->type.begins_with("\\$"))
 						cell->type = cell->type.substr(1);
 					continue;
 				}

@@ -2,6 +2,10 @@
 `define SB_DFF_REG reg Q = 0
 // `define SB_DFF_REG reg Q
 
+`define ABC9_ARRIVAL_HX(TIME) `ifdef ICE40_HX (* abc9_arrival=TIME *) `endif
+`define ABC9_ARRIVAL_LP(TIME) `ifdef ICE40_LP (* abc9_arrival=TIME *) `endif
+`define ABC9_ARRIVAL_U(TIME)  `ifdef ICE40_U (* abc9_arrival=TIME *) `endif
+
 // SiliconBlue IO Cells
 
 module SB_IO (
@@ -127,6 +131,7 @@ endmodule
 
 // SiliconBlue Logic Cells
 
+(* lib_whitebox *)
 module SB_LUT4 (output O, input I0, I1, I2, I3);
 	parameter [15:0] LUT_INIT = 0;
 	wire [7:0] s3 = I3 ? LUT_INIT[15:8] : LUT_INIT[7:0];
@@ -135,24 +140,47 @@ module SB_LUT4 (output O, input I0, I1, I2, I3);
 	assign O = I0 ? s1[1] : s1[0];
 endmodule
 
+(* lib_whitebox *)
 module SB_CARRY (output CO, input I0, I1, CI);
 	assign CO = (I0 && I1) || ((I0 || I1) && CI);
 endmodule
 
+// Max delay from: https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_hx1k.txt#L90
+//                 https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_lp1k.txt#L90
+//                 https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_up5k.txt#L102
+
 // Positive Edge SiliconBlue FF Cells
 
-module SB_DFF (output `SB_DFF_REG, input C, D);
+module SB_DFF (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, D
+);
 	always @(posedge C)
 		Q <= D;
 endmodule
 
-module SB_DFFE (output `SB_DFF_REG, input C, E, D);
+module SB_DFFE (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, D
+);
 	always @(posedge C)
 		if (E)
 			Q <= D;
 endmodule
 
-module SB_DFFSR (output `SB_DFF_REG, input C, R, D);
+module SB_DFFSR (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, R, D
+);
 	always @(posedge C)
 		if (R)
 			Q <= 0;
@@ -160,7 +188,13 @@ module SB_DFFSR (output `SB_DFF_REG, input C, R, D);
 			Q <= D;
 endmodule
 
-module SB_DFFR (output `SB_DFF_REG, input C, R, D);
+module SB_DFFR (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, R, D
+);
 	always @(posedge C, posedge R)
 		if (R)
 			Q <= 0;
@@ -168,7 +202,13 @@ module SB_DFFR (output `SB_DFF_REG, input C, R, D);
 			Q <= D;
 endmodule
 
-module SB_DFFSS (output `SB_DFF_REG, input C, S, D);
+module SB_DFFSS (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, S, D
+);
 	always @(posedge C)
 		if (S)
 			Q <= 1;
@@ -176,7 +216,13 @@ module SB_DFFSS (output `SB_DFF_REG, input C, S, D);
 			Q <= D;
 endmodule
 
-module SB_DFFS (output `SB_DFF_REG, input C, S, D);
+module SB_DFFS (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, S, D
+);
 	always @(posedge C, posedge S)
 		if (S)
 			Q <= 1;
@@ -184,7 +230,13 @@ module SB_DFFS (output `SB_DFF_REG, input C, S, D);
 			Q <= D;
 endmodule
 
-module SB_DFFESR (output `SB_DFF_REG, input C, E, R, D);
+module SB_DFFESR (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, R, D
+);
 	always @(posedge C)
 		if (E) begin
 			if (R)
@@ -194,7 +246,13 @@ module SB_DFFESR (output `SB_DFF_REG, input C, E, R, D);
 		end
 endmodule
 
-module SB_DFFER (output `SB_DFF_REG, input C, E, R, D);
+module SB_DFFER (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, R, D
+);
 	always @(posedge C, posedge R)
 		if (R)
 			Q <= 0;
@@ -202,7 +260,13 @@ module SB_DFFER (output `SB_DFF_REG, input C, E, R, D);
 			Q <= D;
 endmodule
 
-module SB_DFFESS (output `SB_DFF_REG, input C, E, S, D);
+module SB_DFFESS (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, S, D
+);
 	always @(posedge C)
 		if (E) begin
 			if (S)
@@ -212,7 +276,13 @@ module SB_DFFESS (output `SB_DFF_REG, input C, E, S, D);
 		end
 endmodule
 
-module SB_DFFES (output `SB_DFF_REG, input C, E, S, D);
+module SB_DFFES (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, S, D
+);
 	always @(posedge C, posedge S)
 		if (S)
 			Q <= 1;
@@ -222,18 +292,36 @@ endmodule
 
 // Negative Edge SiliconBlue FF Cells
 
-module SB_DFFN (output `SB_DFF_REG, input C, D);
+module SB_DFFN (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, D
+);
 	always @(negedge C)
 		Q <= D;
 endmodule
 
-module SB_DFFNE (output `SB_DFF_REG, input C, E, D);
+module SB_DFFNE (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, D
+);
 	always @(negedge C)
 		if (E)
 			Q <= D;
 endmodule
 
-module SB_DFFNSR (output `SB_DFF_REG, input C, R, D);
+module SB_DFFNSR (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, R, D
+);
 	always @(negedge C)
 		if (R)
 			Q <= 0;
@@ -241,7 +329,13 @@ module SB_DFFNSR (output `SB_DFF_REG, input C, R, D);
 			Q <= D;
 endmodule
 
-module SB_DFFNR (output `SB_DFF_REG, input C, R, D);
+module SB_DFFNR (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, R, D
+);
 	always @(negedge C, posedge R)
 		if (R)
 			Q <= 0;
@@ -249,7 +343,13 @@ module SB_DFFNR (output `SB_DFF_REG, input C, R, D);
 			Q <= D;
 endmodule
 
-module SB_DFFNSS (output `SB_DFF_REG, input C, S, D);
+module SB_DFFNSS (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, S, D
+);
 	always @(negedge C)
 		if (S)
 			Q <= 1;
@@ -257,7 +357,13 @@ module SB_DFFNSS (output `SB_DFF_REG, input C, S, D);
 			Q <= D;
 endmodule
 
-module SB_DFFNS (output `SB_DFF_REG, input C, S, D);
+module SB_DFFNS (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, S, D
+);
 	always @(negedge C, posedge S)
 		if (S)
 			Q <= 1;
@@ -265,7 +371,13 @@ module SB_DFFNS (output `SB_DFF_REG, input C, S, D);
 			Q <= D;
 endmodule
 
-module SB_DFFNESR (output `SB_DFF_REG, input C, E, R, D);
+module SB_DFFNESR (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, R, D
+);
 	always @(negedge C)
 		if (E) begin
 			if (R)
@@ -275,7 +387,13 @@ module SB_DFFNESR (output `SB_DFF_REG, input C, E, R, D);
 		end
 endmodule
 
-module SB_DFFNER (output `SB_DFF_REG, input C, E, R, D);
+module SB_DFFNER (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, R, D
+);
 	always @(negedge C, posedge R)
 		if (R)
 			Q <= 0;
@@ -283,7 +401,13 @@ module SB_DFFNER (output `SB_DFF_REG, input C, E, R, D);
 			Q <= D;
 endmodule
 
-module SB_DFFNESS (output `SB_DFF_REG, input C, E, S, D);
+module SB_DFFNESS (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, S, D
+);
 	always @(negedge C)
 		if (E) begin
 			if (S)
@@ -293,7 +417,13 @@ module SB_DFFNESS (output `SB_DFF_REG, input C, E, S, D);
 		end
 endmodule
 
-module SB_DFFNES (output `SB_DFF_REG, input C, E, S, D);
+module SB_DFFNES (
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output `SB_DFF_REG,
+	input C, E, S, D
+);
 	always @(negedge C, posedge S)
 		if (S)
 			Q <= 1;
@@ -304,6 +434,9 @@ endmodule
 // SiliconBlue RAM Cells
 
 module SB_RAM40_4K (
+	`ABC9_ARRIVAL_HX(2146) // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_hx1k.txt#L401
+	`ABC9_ARRIVAL_LP(3163) // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_lp1k.txt#L401
+	`ABC9_ARRIVAL_U(1179)  // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_up5k.txt#L13026
 	output [15:0] RDATA,
 	input         RCLK, RCLKE, RE,
 	input  [10:0] RADDR,
@@ -472,6 +605,9 @@ module SB_RAM40_4K (
 endmodule
 
 module SB_RAM40_4KNR (
+	`ABC9_ARRIVAL_HX(2146) // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_hx1k.txt#L401
+	`ABC9_ARRIVAL_LP(3163) // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_lp1k.txt#L401
+	`ABC9_ARRIVAL_U(1179)  // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_up5k.txt#L13026
 	output [15:0] RDATA,
 	input         RCLKN, RCLKE, RE,
 	input  [10:0] RADDR,
@@ -537,6 +673,9 @@ module SB_RAM40_4KNR (
 endmodule
 
 module SB_RAM40_4KNW (
+	`ABC9_ARRIVAL_HX(2146) // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_hx1k.txt#L401
+	`ABC9_ARRIVAL_LP(3163) // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_lp1k.txt#L401
+	`ABC9_ARRIVAL_U(1179)  // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_up5k.txt#L13026
 	output [15:0] RDATA,
 	input         RCLK, RCLKE, RE,
 	input  [10:0] RADDR,
@@ -602,6 +741,9 @@ module SB_RAM40_4KNW (
 endmodule
 
 module SB_RAM40_4KNRNW (
+	`ABC9_ARRIVAL_HX(2146) // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_hx1k.txt#L401
+	`ABC9_ARRIVAL_LP(3163) // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_lp1k.txt#L401
+	`ABC9_ARRIVAL_U(1179)  // https://github.com/cliffordwolf/icestorm/blob/95949315364f8d9b0c693386aefadf44b28e2cf6/icefuzz/timings_up5k.txt#L13026
 	output [15:0] RDATA,
 	input         RCLKN, RCLKE, RE,
 	input  [10:0] RADDR,
@@ -670,7 +812,12 @@ endmodule
 
 module ICESTORM_LC (
 	input I0, I1, I2, I3, CIN, CLK, CEN, SR,
-	output LO, O, COUT
+	output LO,
+	`ABC9_ARRIVAL_HX(540)
+	`ABC9_ARRIVAL_LP(796)
+	`ABC9_ARRIVAL_U(1391)
+	output O,
+	output COUT
 );
 	parameter [15:0] LUT_INIT = 0;
 
@@ -963,6 +1110,30 @@ module SB_RGBA_DRV(
 	input RGB0PWM,
 	input RGB1PWM,
 	input RGB2PWM,
+	output RGB0,
+	output RGB1,
+	output RGB2
+);
+parameter CURRENT_MODE = "0b0";
+parameter RGB0_CURRENT = "0b000000";
+parameter RGB1_CURRENT = "0b000000";
+parameter RGB2_CURRENT = "0b000000";
+endmodule
+
+(* blackbox *)
+module SB_LED_DRV_CUR(
+	input EN,
+	output LEDPU
+);
+endmodule
+
+(* blackbox *)
+module SB_RGB_DRV(
+	input RGBLEDEN,
+	input RGB0PWM,
+	input RGB1PWM,
+	input RGB2PWM,
+	input RGBPU,
 	output RGB0,
 	output RGB1,
 	output RGB2
@@ -1314,13 +1485,13 @@ module SB_MAC16 (
 	wire [15:0] p_Ah_Bh, p_Al_Bh, p_Ah_Bl, p_Al_Bl;
 	wire [15:0] Ah, Al, Bh, Bl;
 	assign Ah = {A_SIGNED ? {8{iA[15]}} : 8'b0, iA[15: 8]};
-	assign Al = {A_SIGNED ? {8{iA[ 7]}} : 8'b0, iA[ 7: 0]};
+	assign Al = {A_SIGNED && MODE_8x8 ? {8{iA[ 7]}} : 8'b0, iA[ 7: 0]};
 	assign Bh = {B_SIGNED ? {8{iB[15]}} : 8'b0, iB[15: 8]};
-	assign Bl = {B_SIGNED ? {8{iB[ 7]}} : 8'b0, iB[ 7: 0]};
-	assign p_Ah_Bh = Ah * Bh;
-	assign p_Al_Bh = Al * Bh;
-	assign p_Ah_Bl = Ah * Bl;
-	assign p_Al_Bl = Al * Bl;
+	assign Bl = {B_SIGNED && MODE_8x8 ? {8{iB[ 7]}} : 8'b0, iB[ 7: 0]};
+	assign p_Ah_Bh = Ah * Bh; // F
+	assign p_Al_Bh = {8'b0, Al[7:0]} * Bh; // J
+	assign p_Ah_Bl = Ah * {8'b0, Bl[7:0]}; // K
+	assign p_Al_Bl = Al * Bl; // G
 
 	// Regs F and J
 	reg [15:0] rF, rJ;
@@ -1351,7 +1522,9 @@ module SB_MAC16 (
 	assign iG = BOT_8x8_MULT_REG ? rG : p_Al_Bl;
 
 	// Adder Stage
-	assign iL = iG + (iK << 8) + (iJ << 8) + (iF << 16);
+	wire [23:0] iK_e = {A_SIGNED ? {8{iK[15]}} : 8'b0, iK};
+	wire [23:0] iJ_e = {B_SIGNED ? {8{iJ[15]}} : 8'b0, iJ};
+	assign iL = iG + (iK_e << 8) + (iJ_e << 8) + (iF << 16);
 
 	// Reg H
 	reg [31:0] rH;

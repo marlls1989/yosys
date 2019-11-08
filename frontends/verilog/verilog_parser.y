@@ -133,7 +133,7 @@ struct specify_rise_fall {
 }
 
 %token <string> TOK_STRING TOK_ID TOK_CONSTVAL TOK_REALVAL TOK_PRIMITIVE
-%token <string> TOK_SVA_LABEL TOK_SPECIFY_OPER TOK_ELAB_TASK
+%token <string> TOK_SVA_LABEL TOK_SPECIFY_OPER TOK_MSG_TASKS
 %token TOK_ASSERT TOK_ASSUME TOK_RESTRICT TOK_COVER TOK_FINAL
 %token ATTR_BEGIN ATTR_END DEFATTR_BEGIN DEFATTR_END
 %token TOK_MODULE TOK_ENDMODULE TOK_PARAMETER TOK_LOCALPARAM TOK_DEFPARAM
@@ -155,7 +155,7 @@ struct specify_rise_fall {
 
 %type <ast> range range_or_multirange  non_opt_range non_opt_multirange range_or_signed_int
 %type <ast> wire_type expr basic_expr concat_list rvalue lvalue lvalue_concat_list
-%type <string> opt_label opt_sva_label tok_prim_wrapper hierarchical_id
+%type <string> opt_label opt_sva_label tok_prim_wrapper hierarchical_id hierarchical_type_id
 %type <boolean> opt_signed opt_property unique_case_attr
 %type <al> attr case_attr
 
@@ -206,6 +206,7 @@ design:
 	task_func_decl design |
 	param_decl design |
 	localparam_decl design |
+	typedef_decl design |
 	package design |
 	interface design |
 	/* empty */;
@@ -274,7 +275,7 @@ hierarchical_id:
 		$$ = $1;
 	} |
 	hierarchical_id TOK_PACKAGESEP TOK_ID {
-		if ($3->substr(0, 1) == "\\")
+		if ($3->compare(0, 1, "\\") == 0)
 			*$1 += "::" + $3->substr(1);
 		else
 			*$1 += "::" + *$3;
@@ -282,13 +283,16 @@ hierarchical_id:
 		$$ = $1;
 	} |
 	hierarchical_id '.' TOK_ID {
-		if ($3->substr(0, 1) == "\\")
+		if ($3->compare(0, 1, "\\") == 0)
 			*$1 += "." + $3->substr(1);
 		else
 			*$1 += "." + *$3;
 		delete $3;
 		$$ = $1;
 	};
+
+hierarchical_type_id:
+	'(' hierarchical_id ')' { $$ = $2; };
 
 module:
 	attr TOK_MODULE TOK_ID {
@@ -319,16 +323,18 @@ module_para_list:
 
 single_module_para:
 	/* empty */ |
-	TOK_PARAMETER {
+	attr TOK_PARAMETER {
 		if (astbuf1) delete astbuf1;
 		astbuf1 = new AstNode(AST_PARAMETER);
 		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
-	} param_signed param_integer param_range single_param_decl |
-	TOK_LOCALPARAM {
+		append_attr(astbuf1, $1);
+	} param_type single_param_decl |
+	attr TOK_LOCALPARAM {
 		if (astbuf1) delete astbuf1;
 		astbuf1 = new AstNode(AST_LOCALPARAM);
 		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
-	} param_signed param_integer param_range single_param_decl |
+		append_attr(astbuf1, $1);
+	} param_type single_param_decl |
 	single_param_decl;
 
 module_args_opt:
@@ -345,7 +351,13 @@ module_arg_opt_assignment:
 		if (ast_stack.back()->children.size() > 0 && ast_stack.back()->children.back()->type == AST_WIRE) {
 			AstNode *wire = new AstNode(AST_IDENTIFIER);
 			wire->str = ast_stack.back()->children.back()->str;
-			if (ast_stack.back()->children.back()->is_reg)
+			if (ast_stack.back()->children.back()->is_input) {
+				AstNode *n = ast_stack.back()->children.back();
+				if (n->attributes.count("\\defaultvalue"))
+					delete n->attributes.at("\\defaultvalue");
+				n->attributes["\\defaultvalue"] = $2;
+			} else
+			if (ast_stack.back()->children.back()->is_reg || ast_stack.back()->children.back()->is_logic)
 				ast_stack.back()->children.push_back(new AstNode(AST_INITIAL, new AstNode(AST_BLOCK, new AstNode(AST_ASSIGN_LE, wire, $2))));
 			else
 				ast_stack.back()->children.push_back(new AstNode(AST_ASSIGN, wire, $2));
@@ -418,6 +430,7 @@ package_body:
 	package_body package_body_stmt |;
 
 package_body_stmt:
+	typedef_decl |
 	localparam_decl;
 
 interface:
@@ -444,7 +457,7 @@ interface_body:
 	interface_body interface_body_stmt |;
 
 interface_body_stmt:
-	param_decl | localparam_decl | defparam_decl | wire_decl | always_stmt | assign_stmt |
+	param_decl | localparam_decl | typedef_decl | defparam_decl | wire_decl | always_stmt | assign_stmt |
 	modport_stmt;
 
 non_opt_delay:
@@ -467,8 +480,14 @@ wire_type:
 	};
 
 wire_type_token_list:
-	wire_type_token | wire_type_token_list wire_type_token |
-	wire_type_token_io ;
+	wire_type_token |
+	wire_type_token_list wire_type_token |
+	wire_type_token_io |
+	hierarchical_type_id {
+		astbuf3->is_custom_type = true;
+		astbuf3->children.push_back(new AstNode(AST_WIRETYPE));
+		astbuf3->children.back()->str = *$1;
+	};
 
 wire_type_token_io:
 	TOK_INPUT {
@@ -509,6 +528,7 @@ wire_type_token:
 	TOK_GENVAR {
 		astbuf3->type = AST_GENVAR;
 		astbuf3->is_reg = true;
+		astbuf3->is_signed = true;
 		astbuf3->range_left = 31;
 		astbuf3->range_right = 0;
 	} |
@@ -582,7 +602,7 @@ module_body:
 	/* empty */;
 
 module_body_stmt:
-	task_func_decl | specify_block |param_decl | localparam_decl | defparam_decl | specparam_declaration | wire_decl | assign_stmt | cell_stmt |
+	task_func_decl | specify_block | param_decl | localparam_decl | typedef_decl | defparam_decl | specparam_declaration | wire_decl | assign_stmt | cell_stmt |
 	always_stmt | TOK_GENERATE module_gen_body TOK_ENDGENERATE | defattr | assert_property | checker_decl | ignored_specify_block;
 
 checker_decl:
@@ -1012,13 +1032,8 @@ list_of_specparam_assignments:
 specparam_assignment:
 	ignspec_id '=' constant_mintypmax_expression ;
 
-/*
-pulsestyle_declaration :
-	;
-
-showcancelled_declaration :
-	;
-*/
+ignspec_opt_cond:
+	TOK_IF '(' ignspec_expr ')' | /* empty */;
 
 path_declaration :
 	simple_path_declaration ';'
@@ -1027,8 +1042,8 @@ path_declaration :
 	;
 
 simple_path_declaration :
-	parallel_path_description '=' path_delay_value |
-	full_path_description '=' path_delay_value
+	ignspec_opt_cond parallel_path_description '=' path_delay_value |
+	ignspec_opt_cond full_path_description '=' path_delay_value
 	;
 
 path_delay_value :
@@ -1038,32 +1053,20 @@ path_delay_value :
 	;
 
 list_of_path_delay_extra_expressions :
-/*
-	t_path_delay_expression
-	| trise_path_delay_expression ',' tfall_path_delay_expression
-	| trise_path_delay_expression ',' tfall_path_delay_expression ',' tz_path_delay_expression
-	| t01_path_delay_expression ',' t10_path_delay_expression ',' t0z_path_delay_expression ','
-	  tz1_path_delay_expression ',' t1z_path_delay_expression ',' tz0_path_delay_expression
-	| t01_path_delay_expression ',' t10_path_delay_expression ',' t0z_path_delay_expression ','
-	  tz1_path_delay_expression ',' t1z_path_delay_expression ',' tz0_path_delay_expression ','
-	  t0x_path_delay_expression ',' tx1_path_delay_expression ',' t1x_path_delay_expression ','
-	  tx0_path_delay_expression ',' txz_path_delay_expression ',' tzx_path_delay_expression
-*/
-	',' path_delay_expression
-	|  ',' path_delay_expression ',' path_delay_expression
-	|  ',' path_delay_expression ',' path_delay_expression ','
-	  path_delay_expression ',' path_delay_expression ',' path_delay_expression
-	|  ',' path_delay_expression ',' path_delay_expression ','
-	  path_delay_expression ',' path_delay_expression ',' path_delay_expression ','
-	  path_delay_expression ',' path_delay_expression ',' path_delay_expression ','
-	  path_delay_expression ',' path_delay_expression ',' path_delay_expression
-	;
+	',' path_delay_expression | ',' path_delay_expression list_of_path_delay_extra_expressions;
+
+specify_edge_identifier :
+	TOK_POSEDGE | TOK_NEGEDGE ;
 
 parallel_path_description :
-	'(' specify_input_terminal_descriptor opt_polarity_operator '=' '>' specify_output_terminal_descriptor ')' ;
+	'(' specify_input_terminal_descriptor opt_polarity_operator '=' '>' specify_output_terminal_descriptor ')' |
+	'(' specify_edge_identifier specify_input_terminal_descriptor '=' '>' '(' specify_output_terminal_descriptor opt_polarity_operator ':' ignspec_expr ')' ')' |
+	'(' specify_edge_identifier specify_input_terminal_descriptor '=' '>' '(' specify_output_terminal_descriptor TOK_POS_INDEXED ignspec_expr ')' ')' ;
 
 full_path_description :
-	'(' list_of_path_inputs '*' '>' list_of_path_outputs ')' ;
+	'(' list_of_path_inputs '*' '>' list_of_path_outputs ')' |
+	'(' specify_edge_identifier list_of_path_inputs '*' '>' '(' list_of_path_outputs opt_polarity_operator ':' ignspec_expr ')' ')' |
+	'(' specify_edge_identifier list_of_path_inputs '*' '>' '(' list_of_path_outputs TOK_POS_INDEXED ignspec_expr ')' ')' ;
 
 // This was broken into 2 rules to solve shift/reduce conflicts
 list_of_path_inputs :
@@ -1102,56 +1105,6 @@ system_timing_arg :
 system_timing_args :
 	system_timing_arg |
 	system_timing_args ',' system_timing_arg ;
-
-/*
-t_path_delay_expression :
-	path_delay_expression;
-
-trise_path_delay_expression :
-	path_delay_expression;
-
-tfall_path_delay_expression :
-	path_delay_expression;
-
-tz_path_delay_expression :
-	path_delay_expression;
-
-t01_path_delay_expression :
-	path_delay_expression;
-
-t10_path_delay_expression :
-	path_delay_expression;
-
-t0z_path_delay_expression :
-	path_delay_expression;
-
-tz1_path_delay_expression :
-	path_delay_expression;
-
-t1z_path_delay_expression :
-	path_delay_expression;
-
-tz0_path_delay_expression :
-	path_delay_expression;
-
-t0x_path_delay_expression :
-	path_delay_expression;
-
-tx1_path_delay_expression :
-	path_delay_expression;
-
-t1x_path_delay_expression :
-	path_delay_expression;
-
-tx0_path_delay_expression :
-	path_delay_expression;
-
-txz_path_delay_expression :
-	path_delay_expression;
-
-tzx_path_delay_expression :
-	path_delay_expression;
-*/
 
 path_delay_expression :
 	ignspec_constant_expression;
@@ -1207,11 +1160,20 @@ param_range:
 		}
 	};
 
+param_type:
+	param_signed param_integer param_real param_range |
+	hierarchical_type_id {
+		astbuf1->is_custom_type = true;
+		astbuf1->children.push_back(new AstNode(AST_WIRETYPE));
+		astbuf1->children.back()->str = *$1;
+	};
+
 param_decl:
 	attr TOK_PARAMETER {
 		astbuf1 = new AstNode(AST_PARAMETER);
 		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
-	} param_signed param_integer param_real param_range param_decl_list ';' {
+		append_attr(astbuf1, $1);
+	} param_type param_decl_list ';' {
 		delete astbuf1;
 	};
 
@@ -1219,7 +1181,8 @@ localparam_decl:
 	attr TOK_LOCALPARAM {
 		astbuf1 = new AstNode(AST_LOCALPARAM);
 		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
-	} param_signed param_integer param_real param_range param_decl_list ';' {
+		append_attr(astbuf1, $1);
+	} param_type param_decl_list ';' {
 		delete astbuf1;
 	};
 
@@ -1360,7 +1323,12 @@ wire_name_and_opt_assign:
 	wire_name '=' expr {
 		AstNode *wire = new AstNode(AST_IDENTIFIER);
 		wire->str = ast_stack.back()->children.back()->str;
-		if (astbuf1->is_reg)
+		if (astbuf1->is_input) {
+			if (astbuf1->attributes.count("\\defaultvalue"))
+				delete astbuf1->attributes.at("\\defaultvalue");
+			astbuf1->attributes["\\defaultvalue"] = $3;
+		} else
+		if (astbuf1->is_reg || astbuf1->is_logic)
 			ast_stack.back()->children.push_back(new AstNode(AST_INITIAL, new AstNode(AST_BLOCK, new AstNode(AST_ASSIGN_LE, wire, $3))));
 		else
 			ast_stack.back()->children.push_back(new AstNode(AST_ASSIGN, wire, $3));
@@ -1378,14 +1346,20 @@ wire_name:
 		if ($2 != NULL) {
 			if (node->is_input || node->is_output)
 				frontend_verilog_yyerror("input/output/inout ports cannot have unpacked dimensions.");
-			if (!astbuf2) {
+			if (!astbuf2 && !node->is_custom_type) {
 				AstNode *rng = new AstNode(AST_RANGE);
 				rng->children.push_back(AstNode::mkconst_int(0, true));
 				rng->children.push_back(AstNode::mkconst_int(0, true));
 				node->children.push_back(rng);
 			}
 			node->type = AST_MEMORY;
-			node->children.push_back($2);
+			auto *rangeNode = $2;
+			if (rangeNode->type == AST_RANGE && rangeNode->children.size() == 1) {
+				// SV array size [n], rewrite as [n-1:0]
+				rangeNode->children[0] = new AstNode(AST_SUB, rangeNode->children[0], AstNode::mkconst_int(1, true));
+				rangeNode->children.push_back(AstNode::mkconst_int(0, false));
+			}
+			node->children.push_back(rangeNode);
 		}
 		if (current_function_or_task == NULL) {
 			if (do_not_require_port_stubs && (node->is_input || node->is_output) && port_stubs.count(*$1) == 0) {
@@ -1420,6 +1394,45 @@ assign_expr_list:
 assign_expr:
 	lvalue '=' expr {
 		ast_stack.back()->children.push_back(new AstNode(AST_ASSIGN, $1, $3));
+	};
+
+typedef_decl:
+	TOK_TYPEDEF wire_type range TOK_ID range_or_multirange ';' {
+		astbuf1 = $2;
+		astbuf2 = $3;
+		if (astbuf1->range_left >= 0 && astbuf1->range_right >= 0) {
+			if (astbuf2) {
+				frontend_verilog_yyerror("integer/genvar types cannot have packed dimensions.");
+			} else {
+				astbuf2 = new AstNode(AST_RANGE);
+				astbuf2->children.push_back(AstNode::mkconst_int(astbuf1->range_left, true));
+				astbuf2->children.push_back(AstNode::mkconst_int(astbuf1->range_right, true));
+			}
+		}
+		if (astbuf2 && astbuf2->children.size() != 2)
+			frontend_verilog_yyerror("wire/reg/logic packed dimension must be of the form: [<expr>:<expr>], [<expr>+:<expr>], or [<expr>-:<expr>]");
+		if (astbuf2)
+			astbuf1->children.push_back(astbuf2);
+
+		if ($5 != NULL) {
+			if (!astbuf2) {
+				AstNode *rng = new AstNode(AST_RANGE);
+				rng->children.push_back(AstNode::mkconst_int(0, true));
+				rng->children.push_back(AstNode::mkconst_int(0, true));
+				astbuf1->children.push_back(rng);
+			}
+			astbuf1->type = AST_MEMORY;
+			auto *rangeNode = $5;
+			if (rangeNode->type == AST_RANGE && rangeNode->children.size() == 1) {
+				// SV array size [n], rewrite as [n-1:0]
+				rangeNode->children[0] = new AstNode(AST_SUB, rangeNode->children[0], AstNode::mkconst_int(1, true));
+				rangeNode->children.push_back(AstNode::mkconst_int(0, false));
+			}
+			astbuf1->children.push_back(rangeNode);
+		}
+
+		ast_stack.back()->children.push_back(new AstNode(AST_TYPEDEF, astbuf1));
+		ast_stack.back()->children.back()->str = *$4;
 	};
 
 cell_stmt:
@@ -1868,10 +1881,20 @@ simple_behavioral_stmt:
 
 // this production creates the obligatory if-else shift/reduce conflict
 behavioral_stmt:
-	defattr | assert | wire_decl | param_decl | localparam_decl |
+	defattr | assert | wire_decl | param_decl | localparam_decl | typedef_decl |
 	non_opt_delay behavioral_stmt |
 	simple_behavioral_stmt ';' | ';' |
 	hierarchical_id attr {
+		AstNode *node = new AstNode(AST_TCALL);
+		node->str = *$1;
+		delete $1;
+		ast_stack.back()->children.push_back(node);
+		ast_stack.push_back(node);
+		append_attr(node, $2);
+	} opt_arg_list ';'{
+		ast_stack.pop_back();
+	} |
+	TOK_MSG_TASKS attr {
 		AstNode *node = new AstNode(AST_TCALL);
 		node->str = *$1;
 		delete $1;
@@ -2177,7 +2200,7 @@ gen_stmt:
 			delete $6;
 		ast_stack.pop_back();
 	} |
-	TOK_ELAB_TASK {
+	TOK_MSG_TASKS {
 		AstNode *node = new AstNode(AST_TECALL);
 		node->str = *$1;
 		delete $1;
@@ -2219,7 +2242,7 @@ basic_expr:
 		$$ = $1;
 	} |
 	'(' expr ')' TOK_CONSTVAL {
-		if ($4->substr(0, 1) != "'")
+		if ($4->compare(0, 1, "'") != 0)
 			frontend_verilog_yyerror("Cast operation must be applied on sized constants e.g. (<expr>)<constval> , while %s is not a sized constant.", $4->c_str());
 		AstNode *bits = $2;
 		AstNode *val = const2ast(*$4, case_type_stack.size() == 0 ? 0 : case_type_stack.back(), !lib_mode);
@@ -2229,7 +2252,7 @@ basic_expr:
 		delete $4;
 	} |
 	hierarchical_id TOK_CONSTVAL {
-		if ($2->substr(0, 1) != "'")
+		if ($2->compare(0, 1, "'") != 0)
 			frontend_verilog_yyerror("Cast operation must be applied on sized constants, e.g. <ID>\'d0, while %s is not a sized constant.", $2->c_str());
 		AstNode *bits = new AstNode(AST_IDENTIFIER);
 		bits->str = *$1;
